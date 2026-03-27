@@ -15,6 +15,9 @@ build/
 venv/
 env/
 
+# VSCode
+.vscode/
+
 # PyCharm / IDEs
 .idea/
 
