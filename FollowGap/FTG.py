@@ -216,9 +216,9 @@ class FollowGap:
 
         Returns:
             tuple:
-                best_index (int): Index du point sélectionné dans le scan
-                best_angle (float): Angle final de navigation (rad)
-                scan (np.ndarray): Scan prétraité Nx2 [distance, angle]
+                - best_index (int): Index du point sélectionné dans le scan
+                - best_angle (float): Angle final de navigation (rad)
+                - scan (np.ndarray): Scan prétraité Nx2 [distance, angle]
         """
         scan = self.preprocess_lidar(scan)
 
