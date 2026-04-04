@@ -18,7 +18,9 @@ Sorties : cmd_vel = {"linear": x, "angular": y}
 # Ludo : À modifier les schémas de fonctions car peu clair et pas adapter
 
 from FTG import FollowGap #Ramène la classe FollowGap
-import motor
+
+import numpy as np
+
 def navigate(scan, yaw, k=0.4):
     """
     Comportement principal : navigation vers la cible avec évitement.
@@ -38,7 +40,23 @@ def navigate(scan, yaw, k=0.4):
                 "angular": float (rad/s)
             }
     """
-    pass
+
+     # 1. Vérifier danger en priorité
+    cmd = emergency_stop(scan)
+    if cmd is not None:
+        return cmd
+
+    # 2. Sinon comportement normal
+    fg = FollowGap()
+    best_i, theta, scan_processed = fg.compute(scan, yaw)
+
+    if best_i is None or theta is None:
+        return escape(scan, theta)
+
+    return {
+        "linear": 0.5,
+        "angular": theta
+    }
 
 
 def circle_object(scan, desired_distance=1.0):
@@ -58,7 +76,7 @@ def circle_object(scan, desired_distance=1.0):
     pass
 
 
-def escape():
+def escape(scan, theta):
     """
     Comportement d'urgence si le robot est bloqué.
 
@@ -66,24 +84,54 @@ def escape():
         cmd_vel (dict):
             Commande pour tourner ou reculer.
     """
-    return {"linear": 0.0, "angular": 0.8}
-
-def emergency_stop():
-
     fg = FollowGap()
-    
     scan_processed = fg.preprocess_lidar(scan)
 
     distances = scan_processed[:, 0]
+    min_dist = np.min(distances)
+
+    # 1. Trop proche → reculer
+    if min_dist < 0.35:
+        return {"linear": -0.2, "angular": 0.3}
+
+    # 2. Pas de direction → tourner doucement
+    if theta is None:
+        return {"linear": 0.0, "angular": 0.5}
+
+    # 3. Direction valide → tourner vers ouverture
+    return {"linear": 0.0, "angular": theta}
     
-    for i in range (len(distances)):
+def emergency_stop(scan, distance_critique=0.15):
+    """
+    Détecte une situation dangereuse à partir du scan LiDAR.
 
-        if distances[i] < fg.bubble_radius:
+    Args:
+        scan (np.ndarray): Scan LiDAR Nx2 [distance, angle]
+        distance_critique (float): distance minimale sécuritaire (m)
 
-            motor.arret = True
+    Returns:
+        dict ou None:
+            {"linear": 0.0, "angular": 0.0} si danger
+            None sinon
+    """
 
-            return
+    fg = FollowGap()
+    scan_processed = fg.preprocess_lidar(scan)
 
-    return
+    distances = scan_processed[:, 0]
+
+    # Détection du danger
+    danger = False
+
+    for d in distances:
+        if d < distance_critique:
+            danger = True
+            break
+
+    # Action
+    if danger:
+        return {"linear": 0.0, "angular": 0.0}
+
+    return None
 
             
