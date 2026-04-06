@@ -121,6 +121,6 @@ def scan(scan_eff, desired_distance=1.0):
     return {"linear": linear, "angular": angular}
 
 
-def retour_base(path):
+def retour_base(theta_goal):
 
-    return {"linear": 0.0, "angular": path[:, 1]}
+    return {"linear": 0.5, "angular": theta_goal}
