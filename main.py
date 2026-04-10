@@ -15,7 +15,7 @@ Rôle :
 # =================================================
 import time
 import numpy as np
-
+from pynput import keyboard
 
 # =================================================
 # Importation de librairy Périphérique
@@ -43,11 +43,6 @@ from FollowGap import FTG, FSM, tool, sensor
 # =================================================
 
 # IMU
-i2c_IMU = busio.I2C(board.SCL, board.SDA, frequency=100000)
-bno = BNO08X_I2C(i2c_IMU)
-bno.enable_feature(BNO_REPORT_ACCELEROMETER)
-bno.enable_feature(BNO_REPORT_ROTATION_VECTOR)
-bno.enable_feature(BNO_REPORT_LINEAR_ACCELERATION)
 
 
 # PWM
@@ -56,14 +51,62 @@ pca = PCA9685(i2c_PWM)
 pca.frequency = 60
 
 # =================================================
-# Boucle principale
+# Sélection mode de contrôle
 # =================================================
-while True:
-     # 1. Lire capteurs
-    a, yaw = sensor.IMU(bno)
 
-    # DEBUG
-    print(f"Acc: {a.flatten()} | Yaw: {yaw:.2f}")
+print("Veuillez choisir le mode de contrôle pour le rover : ")
+print(" 1 - Mode autonome : Follow the gap")
+print(" 2 - Mode manuel : Clavier AWSD")
+choix_mode = input("Entrer le choix du mode : ")
 
-    time.sleep(0.01)
+if choix_mode == 1 :
+    print("Contrôle autonome sélectionner")
+    # =================================================
+    # Boucle contrôle autonome
+    # =================================================
+    
+    # Initialisation du IMU
+    i2c_IMU = busio.I2C(board.SCL, board.SDA, frequency=100000)
+    bno = BNO08X_I2C(i2c_IMU)
+    bno.enable_feature(BNO_REPORT_ACCELEROMETER)
+    bno.enable_feature(BNO_REPORT_ROTATION_VECTOR)
+    
+    
+    
+else : 
+    print("Contrôle manuel sélectionner")
+    # =================================================
+    # Boucle contrôle manuel
+    # =================================================
+    
+    # Initialisation de la lecture du clavier
+    def on_press(key, injected):
+        try:
+            None
+        except AttributeError:
+            print('special key {} pressed'.format(
+                key))
 
+    def on_release(key, injected):
+        if key == keyboard.Key.esc:
+            # Stop listener
+            return False
+
+    # Collect events until released
+    listener = keyboard.Listener()
+    listener.start()
+    
+    # Boucle principale
+    while True:
+        with keyboard.Events() as events:
+        # Block at most one second (à modifier pour fit la boucle)
+            event = events.get(1.0)
+            if event is None:
+                print('You did not press a key within one second')
+            else:
+                print(event.key)
+                
+                # Garde en mémoire la dernier touche 
+                key_temp = event.key
+                # Ferme le programme avec la touche escape
+                if event.key == keyboard.Key.esc : break
