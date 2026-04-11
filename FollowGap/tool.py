@@ -143,3 +143,34 @@ def compute_scan(pts_rot: np.ndarray, z_min = 0.05, z_max = 0.5) ->  tuple[np.nd
     dist_weight = dist * weight
     
     return np.column_stack(dist, theta), np.column_stack(dist_weight, theta)
+
+def apply_command(pca, cmd):
+    """
+    Convertit une commande (linear, angular)
+    en PWM pour les moteurs
+
+    Paramètres d'entrées:
+
+            cmd: {"linear": linear, "angular": angular}
+
+            pca: C'est le PWM
+    """
+
+    linear = cmd["linear"]
+    angular = cmd["angular"]
+
+    # Conversion différentiel (très simplifié)
+    left = linear - angular
+    right = linear + angular
+
+    # Normalisation [-1, 1]
+    left = max(-1, min(1, left))
+    right = max(-1, min(1, right))
+
+    # Conversion PWM (exemple)
+    pwm_left = int(32767 + left * 32767)
+    pwm_right = int(32767 + right * 32767)
+
+    # Envoi aux canaux (à adapter selon ton câblage)
+    pca.channels[0].duty_cycle = pwm_left
+    pca.channels[1].duty_cycle = pwm_right
