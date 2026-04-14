@@ -6,17 +6,18 @@ Rôle :
 - Décider quel comportement utiliser
 - Gérer les transitions entre états
  
-Exemples d’états :
-- NAVIGATE
-- SCAN
-- ESCAPE
-- RETURN
+États :
+- NAVIGATE     : déplacement principal vers l'objectif
+- SCAN         : inspection de l'objectif à l'arrivée
+- ESCAPE       : sortir d'un blocage simple
+- CUL-DE-SAC   : blocage persistant détecté
+- RETOUR_BASE  : retour au point de départ
+- STOP         : arrêt d'urgence (obstacle très proche)
+- BASE_REACHED : mission complète (scan + retour à la base)
  
 Entrées : données capteurs
 Sortie : nom du behavior à exécuter
 """
- 
-# Ludo : À modifier les schémas de fonctions car peu clair et pas adapter
  
 import numpy as np
 from dataclasses import dataclass, field
@@ -33,7 +34,6 @@ class RobotState:
  
     # Historique
     theta_history: deque = field(default_factory=lambda: deque(maxlen=10))
-    # FIX #2 — progrès accumulé sur fenêtre glissante (indépendant de la fréquence d'appel)
     progress_history: deque = field(default_factory=lambda: deque(maxlen=10))
     prev_dist_to_goal: float = None
  
@@ -43,6 +43,13 @@ class RobotState:
     # Timers
     escape_timer: int = 0
     scan_timer: int = 0
+ 
+    # RETOUR_BASE : persistance jusqu'à arrivée à la base
+    returning: bool = False
+ 
+    # Seuils d'arrivée (m)
+    goal_radius: float = 0.3
+    base_radius: float = 0.3
  
  
 # =========================
@@ -55,14 +62,38 @@ def update_state(
     robot_pos: tuple,
     goal_pos: tuple,
     state: RobotState,
+    base_pos: tuple = (0.0, 0.0),
     has_valid_gap: bool = True
+   
 ) -> str:
+    """
+    Met à jour la FSM et retourne l'état courant.
+ 
+    Args:
+        scan         : np.ndarray Nx2 [distance, angle]
+        theta_goal   : float, angle vers l'objectif (rad)
+        robot_pos    : tuple (x, y), position courante
+        goal_pos     : tuple (x, y), position de l'objectif
+        state        : RobotState, état interne du robot
+        base_pos     : tuple (x, y), position de départ (défaut (0, 0))
+        has_valid_gap: bool, Follow-the-Gap a trouvé un gap valide
+ 
+    Returns:
+        str : nom de l'état courant
+    """
  
     distances = scan[:, 0]
     angles = scan[:, 1]
  
     # =========================
-    # === MASQUE LOCAL =========
+    # === DONNÉES VIDES =======
+    # =========================
+ 
+    if len(distances) == 0:
+        return "STOP"
+ 
+    # =========================
+    # === MASQUES =============
     # =========================
  
     front_mask = np.abs(angles) < np.pi / 2
@@ -75,7 +106,24 @@ def update_state(
         return "STOP"
  
     # =========================
-    # === STOP (sécurité) ======
+    # === DISTANCES ===========
+    # =========================
+ 
+    dist_to_goal = np.linalg.norm(np.array(goal_pos) - np.array(robot_pos))
+    dist_to_base = np.linalg.norm(np.array(base_pos) - np.array(robot_pos))
+ 
+    # =========================
+    # === BASE_REACHED ========
+    # Mission complète : scan terminé + retour à la base
+    # =========================
+ 
+    if state.returning and dist_to_base < state.base_radius:
+        state.returning = False
+        state.prev_state = "BASE_REACHED"
+        return "BASE_REACHED"
+ 
+    # =========================
+    # === STOP (sécurité) =====
     # =========================
  
     if np.percentile(front_dist, 10) < 0.2:
@@ -84,9 +132,8 @@ def update_state(
         return "STOP"
  
     # =========================
-    # === ESCAPE (prioritaire)
+    # === ESCAPE ==============
     # =========================
- 
     if state.escape_timer > 0 or not has_valid_gap:
         state.escape_timer = max(state.escape_timer, 6)
         state.escape_timer -= 1
@@ -97,17 +144,11 @@ def update_state(
     # === PROGRÈS VERS GOAL ===
     # =========================
  
-    dist_to_goal = np.linalg.norm(np.array(goal_pos) - np.array(robot_pos))
- 
     if state.prev_dist_to_goal is None:
         state.prev_dist_to_goal = dist_to_goal
  
     progress = state.prev_dist_to_goal - dist_to_goal
     state.prev_dist_to_goal = dist_to_goal
- 
-    # FIX #2 — on accumule le progrès dans un historique glissant.
-    # La somme représente la distance totale parcourue sur la fenêtre,
-    # ce qui est invariant à la fréquence d'appel (contrairement au delta par frame).
     state.progress_history.append(progress)
     cumulative_progress = sum(state.progress_history)
  
@@ -118,11 +159,6 @@ def update_state(
     if theta_goal is not None:
         state.theta_history.append(theta_goal)
  
-    # FIX #1 — variance circulaire.
-    # np.var sur des angles est invalide près de ±π : deux angles quasi-identiques
-    # comme -π+0.1 et π-0.1 produisent une variance maximale au lieu de zéro.
-    # La variance circulaire (1 - |mean(e^{jθ})|) est toujours dans [0, 1]
-    # et traite correctement le repliement à ±π.
     if len(state.theta_history) > 1:
         thetas = np.array(state.theta_history)
         theta_var = 1.0 - np.abs(np.mean(np.exp(1j * thetas)))
@@ -130,7 +166,7 @@ def update_state(
         theta_var = 0.0
  
     # =========================
-    # === ENVIRONNEMENT LOCAL ==
+    # === ENVIRONNEMENT LOCAL =
     # =========================
  
     if len(local_dist) > 0:
@@ -144,33 +180,32 @@ def update_state(
     # === CUL-DE-SAC ==========
     # =========================
  
-    # FIX #4 — la condition originale exigeait theta_var élevée, ce qui exclut
-    # le blocage frontal simple (mur droit devant → theta_var ≈ 0).
-    # On retire theta_var de la condition nécessaire et on utilise le progrès
-    # cumulé (FIX #2) comme indicateur principal.
     if cumulative_progress < 0.05 and is_blocked:
         state.stuck_counter += 1
     else:
-        # FIX #3 — décrément graduel au lieu d'un reset brutal.
-        # Un reset total sur une seule frame favorable efface toute l'accumulation
-        # dans un environnement bruité. Le décrément graduel est bien plus robuste.
         state.stuck_counter = max(0, state.stuck_counter - 1)
  
     if state.stuck_counter > 5:
         state.escape_timer = 10
-        state.stuck_counter = 0  # reset pour éviter un re-déclenchement immédiat
+        state.stuck_counter = 0
         state.prev_state = "CUL-DE-SAC"
         return "CUL-DE-SAC"
  
     # =========================
-    # === SCAN (mission) ======
+    # === RETOUR_BASE =========
+    # Persiste jusqu'à arrivée à la base
     # =========================
  
-    # FIX #5 — initialisation et décrément séparés.
-    # Dans l'original, le décrément était à l'intérieur du bloc `dist_to_goal < 1.0`,
-    # donc si le robot dérivait au-delà de 1 m pendant le scan, le timer se gelait
-    # et scan_timer == 0 ne se produisait jamais → RETOUR_BASE jamais déclenché.
-    if dist_to_goal < 1.0 and state.scan_timer == 0:
+    if state.returning:
+        state.prev_state = "RETOUR_BASE"
+        return "RETOUR_BASE"
+ 
+    # =========================
+    # === SCAN ================
+    # Déclenché à l'arrivée à l'objectif
+    # =========================
+ 
+    if dist_to_goal < state.goal_radius and state.scan_timer == 0:
         state.scan_timer = 20
  
     if state.scan_timer > 0:
@@ -178,11 +213,9 @@ def update_state(
         state.prev_state = "SCAN"
         return "SCAN"
  
-    # =========================
-    # === RETOUR BASE =========
-    # =========================
- 
+    # Fin du SCAN → déclenche le retour à la base
     if state.prev_state == "SCAN" and state.scan_timer == 0:
+        state.returning = True
         state.prev_state = "RETOUR_BASE"
         return "RETOUR_BASE"
  
